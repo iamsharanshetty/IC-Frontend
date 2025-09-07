@@ -5,7 +5,7 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "https://asv-8ghi.onrender.com";
 
 // Add timeout and retry logic
-const FETCH_TIMEOUT = 30000; // 30 seconds for document analysis
+const FETCH_TIMEOUT = 100000; // 30 seconds for document analysis
 const UNIVERSITY_TIMEOUT = 100000; // 15 seconds for university search
 const MAX_RETRIES = 2;
 
@@ -208,26 +208,60 @@ async function fetchWithTimeout(
   throw new Error("Maximum retries exceeded");
 }
 
-// API client functions
 export const apiClient = {
   // Health check endpoints
-  async getHealth(): Promise<{ message: string; version?: string }> {
+  // async getHealth(): Promise<{ message: string; version: string }> {
+  //   const response = await fetch(`${API_BASE_URL}/`);
+  //   if (!response.ok) {
+  //     throw new ApiError("Failed to connect to API", response.status);
+  //   }
+  //   return response.json();
+  // },
+
+  // async getStatus(): Promise<{
+  //   status: string;
+  //   message: string;
+  //   services?: any;
+  //   analysis_mode?: string;
+  //   endpoints?: string[];
+  // }> {
+  //   try {
+  //     const response = await fetchWithTimeout(
+  //       `${API_BASE_URL}/status`,
+  //       { method: "GET" },
+  //       5000,
+  //       1
+  //     );
+
+  //     if (!response.ok) {
+  //       throw new ApiError("Failed to get server status", response.status);
+  //     }
+
+  //     return await response.json();
+  //   } catch (error) {
+  //     if (error instanceof ApiError) throw error;
+  //     throw new ApiError("Cannot get server status", 0);
+  //   }
+  // },
+
+  // Replace your existing getHealth and getStatus functions with these:
+
+  async getHealth(): Promise<{ message: string; version: string }> {
     try {
       const response = await fetchWithTimeout(
         `${API_BASE_URL}/`,
         { method: "GET" },
-        5000, // 5 second timeout for health check
-        1 // Only 1 retry for health check
+        60000, // Increased timeout to 15 seconds
+        2 // 2 retry attempts
       );
 
       if (!response.ok) {
         throw new ApiError("Failed to connect to API", response.status);
       }
-
-      return await response.json();
+      return response.json();
     } catch (error) {
       if (error instanceof ApiError) throw error;
-      throw new ApiError("Cannot connect to backend server", 0);
+      throw new ApiError("Cannot connect to health endpoint", 0);
     }
   },
 
@@ -242,8 +276,8 @@ export const apiClient = {
       const response = await fetchWithTimeout(
         `${API_BASE_URL}/status`,
         { method: "GET" },
-        5000,
-        1
+        60000, // Increased timeout to 15 seconds
+        2 // 2 retry attempts
       );
 
       if (!response.ok) {
@@ -257,83 +291,46 @@ export const apiClient = {
     }
   },
 
-  // File analysis endpoint (FIXED)
   async analyzeDocument(file: File): Promise<ApiAnalysisResponse> {
-    console.log(`Starting analysis for: ${file.name} (${file.size} bytes)`);
+    // Convert file to base64 for backend processing
+    const fileBuffer = await file.arrayBuffer();
+    const base64Content = btoa(
+      String.fromCharCode(...new Uint8Array(fileBuffer))
+    );
 
-    try {
-      // Convert file to base64 for backend processing
-      const fileBuffer = await file.arrayBuffer();
-      const base64Content = btoa(
-        String.fromCharCode(...new Uint8Array(fileBuffer))
-      );
+    const fileType = file.type === "application/pdf" ? "pdf" : "txt";
 
-      // Determine file type - FIXED to match backend expectations
-      const fileType = file.type === "application/pdf" ? "pdf" : "txt";
+    const requestBody = {
+      filename: file.name,
+      content: base64Content,
+      file_type: fileType,
+    };
 
-      // FIXED: Match exact backend request structure
-      const requestBody = {
-        filename: file.name,
-        content: base64Content,
-        file_type: fileType,
-      };
+    const response = await fetch(`${API_BASE_URL}/analyze`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
 
-      console.log(`Sending ${fileType} file to ${API_BASE_URL}/analyze`);
-
-      const response = await fetchWithTimeout(
-        `${API_BASE_URL}/analyze`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-          },
-          body: JSON.stringify(requestBody),
-        },
-        FETCH_TIMEOUT
-      );
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        console.error("Analysis failed:", errorData);
-
-        throw new ApiError(
-          errorData.detail ||
-            errorData.error ||
-            `Analysis failed with status ${response.status}`,
-          response.status,
-          errorData
-        );
-      }
-
-      const responseData = await response.json();
-      console.log("Analysis successful:", responseData.summary);
-
-      // Validate response structure
-      if (!responseData.summary || !responseData.claims) {
-        throw new ApiError("Invalid response structure from backend", 500);
-      }
-
-      return responseData;
-    } catch (error) {
-      if (error instanceof ApiError) throw error;
-
-      if (error instanceof Error && error.message.includes("timeout")) {
-        throw new ApiError(
-          "Analysis timeout - please try with a smaller document",
-          408
-        );
-      }
-
-      console.error("Document analysis error:", error);
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
       throw new ApiError(
-        `Analysis failed: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`,
-        500
+        errorData.detail || `Analysis failed with status ${response.status}`,
+        response.status,
+        errorData
       );
     }
+
+    const responseData = await response.json();
+
+    // Debug logging
+    console.log("Raw backend response:", JSON.stringify(responseData, null, 2));
+
+    return responseData;
   },
+  // };
 
   // University reviews endpoint (FIXED)
   async searchUniversityReviews(
